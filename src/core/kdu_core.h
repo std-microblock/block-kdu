@@ -13,3 +13,5 @@
 #include "interfaces/physical_memory.h"
 #include "interfaces/process_operations.h"
 #include "interfaces/virtual_memory.h"
+#include "interfaces/virtual_from_physical_mixin.h"
+#include "interfaces/v2p_from_physical_mixin.h"

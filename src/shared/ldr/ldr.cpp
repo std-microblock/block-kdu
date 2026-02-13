@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "Windows.h"
 #include "../ntos/ntos.h"
 #include "../minirtl/minirtl.h"
@@ -98,7 +99,7 @@ LPVOID PELoaderLoadImage(_In_ LPVOID Buffer, _Out_opt_ PDWORD SizeOfImage) {
             break;
         }
 
-        memcpy(exeBuffer, Buffer, min(headersSize, popth->SizeOfHeaders));
+        memcpy(exeBuffer, Buffer, std::min(headersSize, popth->SizeOfHeaders));
 
         sections =
             (PIMAGE_SECTION_HEADER)((PBYTE)fileh + sizeof(IMAGE_FILE_HEADER) +

@@ -30,19 +30,23 @@ std::expected<HANDLE, std::string> IDriverProvider::load_driver_from_memory(
     std::ignore = unload_driver(service_name);
     // Write driver to file
     try {
-        std::ofstream file(driver_path, std::ios::binary);
-        if (!file) {
-            return std::unexpected("Failed to open driver file for writing");
-        }
-        file.write(reinterpret_cast<const char*>(driver_data), driver_size);
-        file.close();
+        if (fs::exists(driver_path)) {
+            std::println(
+                "Driver file already exists, we will not overwrite: {}. Please "
+                "confirm it is correct.",
+                driver_path.string());
+        } else {
+            std::ofstream file(driver_path, std::ios::binary);
+            if (!file) {
+                return std::unexpected(
+                    "Failed to open driver file for writing");
+            }
+            file.write(reinterpret_cast<const char*>(driver_data), driver_size);
+            file.close();
 
-        // Verify file was written
-        if (!fs::exists(driver_path)) {
-            return std::unexpected("Driver file not found after writing");
+            std::println("Driver file written successfully: {}",
+                         driver_path.string());
         }
-        std::println("Driver file written successfully: {}",
-                     driver_path.string());
     } catch (const std::exception& e) {
         return std::unexpected(std::string("Failed to write driver: ") +
                                e.what());
@@ -68,21 +72,16 @@ std::expected<HANDLE, std::string> IDriverProvider::load_driver_from_memory(
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_EXISTS ||
             error == ERROR_DUPLICATE_SERVICE_NAME) {
-            // Service already exists, clean it up first
-            CloseServiceHandle(scm);
-
-            // Reopen SC Manager and try again
-            scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE);
-            if (!scm) {
+            // Service already exists, use OpenService
+            service = OpenServiceW(
+                scm, service_name.c_str(),
+                SERVICE_START | SERVICE_STOP | DELETE);
+            if (!service) {
+                CloseServiceHandle(scm);
                 DeleteFileW(driver_path.c_str());
-                return std::unexpected("Failed to reopen SC Manager");
+                return std::unexpected("Failed to open existing service: " +
+                                       std::to_string(GetLastError()));
             }
-
-            service = CreateServiceW(
-                scm, service_name.c_str(), service_name.c_str(),
-                SERVICE_START | SERVICE_STOP | DELETE, SERVICE_KERNEL_DRIVER,
-                SERVICE_DEMAND_START, SERVICE_ERROR_IGNORE, driver_path.c_str(),
-                nullptr, nullptr, nullptr, nullptr, nullptr);
         }
 
         if (!service) {
