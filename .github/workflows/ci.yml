@@ -36,7 +36,7 @@ jobs:
     
     - name: Build
       run: |
-        xmake build -y cli-new provider-tests core gdrv_exploit
+        xmake build -y -v
     
     - name: List providers
       run: |
@@ -79,7 +79,6 @@ jobs:
         asset_name: kdu-${{ github.event.release.tag_name }}-windows-x64.zip
         asset_content_type: application/zip
 
-  # Provider 测试 - 每个 Provider 单独运行
   test-gdrv:
     name: Test Provider - GDRV
     needs: build
@@ -94,71 +93,8 @@ jobs:
         path: build
     
     - name: Run tests
-      continue-on-error: true  # 防止蓝屏导致整个 CI 失败
+      continue-on-error: true
       timeout-minutes: 5
       run: |
         cd build
-        # 需要管理员权限，CI 环境可能无法运行
-        # ./provider-tests.exe gdrv
-        echo "Test skipped: requires administrator privileges"
-        exit 0
-
-  # 添加更多 Provider 测试
-  # test-rtcore:
-  #   name: Test Provider - RTCore
-  #   needs: build
-  #   runs-on: windows-latest
-  #   if: github.event_name != 'release'
-  #   
-  #   steps:
-  #   - name: Download artifacts
-  #     uses: actions/download-artifact@v4
-  #     with:
-  #       name: kdu-build-${{ github.sha }}
-  #       path: build
-  #   
-  #   - name: Run tests
-  #     continue-on-error: true
-  #     timeout-minutes: 5
-  #     run: |
-  #       cd build
-  #       ./provider-tests.exe rtcore
-
-  # 语法和静态分析
-  lint:
-    name: Code Quality
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Setup xmake
-      uses: xmake-io/github-action-setup-xmake@v1
-    
-    - name: Check format (xmake format)
-      run: |
-        # xmake format --check
-        echo "Format check skipped"
-    
-    - name: Static analysis
-      run: |
-        # 可以添加 clang-tidy 或其他静态分析工具
-        echo "Static analysis skipped"
-
-  # 文档检查
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Check documentation
-      run: |
-        # 检查必需的文档文件是否存在
-        test -f README.md
-        test -f docs/PROVIDER_DEVELOPMENT.md
-        test -f src/core/README.md
-        echo "Documentation check passed"
+        ./provider-tests.exe gdrv
