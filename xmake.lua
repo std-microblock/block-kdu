@@ -69,7 +69,7 @@ target("provider-tests")
     add_defines("UNICODE", "NOMINMAX")
     add_files("tests/provider_tests.cpp")
     add_includedirs("src", {public = true})
-    add_deps("core", "mapmem-provider", "test-lib")
+    add_deps("core", "mapmem-provider", "phymem-provider", "test-lib")
     set_languages("cxx23")
     add_syslinks("advapi32")
 

