@@ -43,7 +43,7 @@
 #define NTOSKRNL_EXE            L"ntoskrnl.exe"
 #define CI_DLL                  L"CI.dll"
 
-#define DRV64DLL                L"drv64.dll"
+#define DRV64DLL                L"victim-drivers.dll"
 #define DUMMYDLL                L"SB_SMBUS_SDK.dll"
 
 #define WINIO_BASE_DESC         "WinIo by Yariv Kaplan"
