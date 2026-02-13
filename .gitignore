@@ -1,0 +1,6 @@
+/build/
+/.xmake
+/.cache
+*.sln
+*.vcxproj
+*.vcxproj.*
