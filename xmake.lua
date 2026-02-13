@@ -1,6 +1,45 @@
 
 add_rules("mode.releasedbg")
 add_rules("plugin.compile_commands.autoupdate", {outputdir = "build"})
+set_languages("cxx23")
+
+add_requires("cxxopts", "boost_ut")
+
+target("core")
+    set_kind("static")
+    set_encodings("utf-8")
+    add_defines("UNICODE")
+    add_files("src/core/**.cc", "src/core/**.cpp")
+    add_headerfiles("src/core/**.h")
+    add_includedirs("src", {public = true})
+    add_syslinks("advapi32")
+
+local function add_provider_target(name)
+    target(name .. "-provider")
+        set_kind("static")
+        set_encodings("utf-8")
+        add_defines("UNICODE")
+        add_rules("utils.bin2obj", {extensions = {".bin"}})
+        add_files("src/drivers/" .. name .. "/**.cpp")
+        add_files("src/drivers/" .. name .. "/**.bin")
+        add_deps("core")
+        add_ldflags("/WHOLEARCHIVE:" .. name .. "-provider.lib", {force = true, public = true})
+end
+
+add_provider_target("gdrv")
+
+target("cli-new")
+    set_kind("binary")
+    set_encodings("utf-8")
+    add_defines("UNICODE")
+    add_files("src/cli-new/**.cpp")
+    add_headerfiles("src/cli-new/**.hpp", "src/cli-new/**.h")
+    add_includedirs("src/cli-new", "src", {public = true})
+    
+    add_deps("core", "gdrv-provider", {public = true})
+    set_languages("cxx23")
+    add_syslinks("advapi32")
+    add_packages("cxxopts", "boost_ut")
 
 target("shared")
     set_kind("static")
